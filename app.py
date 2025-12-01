@@ -31,12 +31,10 @@ ZARA 상품 리뷰에서 **긍정 / 중립 / 부정 감정**을 예측하고,
 )
 
 # =========================================
-# 2. 모델 로드
-#    - QA: frontend/model_saved (DeBERTa QA)
-#    - Classifier: cardiffnlp/twitter-roberta-base-sentiment (3-class)
+# 2. 모델 로드 (QA DeBERTa)
+#    - QA: ./model_saved (당신이 학습한 DeBERTa QA)
 # =========================================
 
-# --- 2-1. QA 스팬 추출 모델 (당신이 만든 DeBERTa QA) ---
 QA_MODEL_PATH = "./model_saved"  # frontend/model_saved
 
 
@@ -59,19 +57,6 @@ def load_qa_model(model_path: str):
     return qa_tokenizer, qa_model
 
 
-# --- 2-2. 감정 분류용 classifier (간단한 3-class 모델) ---
-CLS_MODEL_NAME = "cardiffnlp/twitter-roberta-base-sentiment"
-
-
-@st.cache_resource(show_spinner="감정 분류 모델을 로드하는 중입니다...")
-def load_classifier():
-    cls_tokenizer = AutoTokenizer.from_pretrained(CLS_MODEL_NAME)
-    cls_model = AutoModelForSequenceClassification.from_pretrained(CLS_MODEL_NAME)
-    cls_model.eval()
-    return cls_tokenizer, cls_model
-
-
-# --- 실제 모델 로딩 ---
 try:
     qa_tokenizer, qa_model = load_qa_model(QA_MODEL_PATH)
 except Exception as e:
@@ -83,89 +68,96 @@ except Exception as e:
     )
     st.stop()
 
-try:
-    cls_tokenizer, cls_model = load_classifier()
-except Exception as e:
-    st.error(
-        "❌ 감정 분류용 모델을 불러오지 못했습니다.\n\n"
-        f"- 모델 이름: `{CLS_MODEL_NAME}`\n"
-        f"- 오류 메시지: `{e}`\n\n"
-        "인터넷 연결 또는 HuggingFace cache 설정을 확인해 주세요."
-    )
-    st.stop()
+
+CANDIDATE_LABELS = ["positive", "neutral", "negative"]
 
 
 # =========================================
-# 3. 감정 분류 함수 (classifier)
+# 3. QA 한 개로 감정 + 스팬 동시 결정
 # =========================================
-def classify_sentiment(text: str):
+def qa_predict_label_and_span(review_text: str):
     """
-    간단한 3-class sentiment classifier.
-    cardiffnlp/twitter-roberta-base-sentiment 기준:
-    LABEL_0 = negative, LABEL_1 = neutral, LABEL_2 = positive
+    하나의 QA 모델로 감정(label)과 스팬(span)을 동시에 결정하는 함수.
+
+    - 각 감정 라벨(positive/neutral/negative)을 question으로 넣고
+      review_text 를 context로 넣어 QA를 3번 수행.
+    - 각 라벨마다:
+        * context 영역에서만 start/end 토큰을 선택
+        * 해당 span의 score = start_logit + end_logit
+    - score가 가장 큰 라벨을 최종 감정으로 선택하고,
+      그때의 span을 최종 스팬으로 사용.
+    - label score 들에 softmax를 씌워 pseudo-probability도 함께 반환.
     """
-    inputs = cls_tokenizer(
-        text,
-        return_tensors="pt",
-        truncation=True,
-        max_length=256,
+    label2score_span = {}
+
+    for label in CANDIDATE_LABELS:
+        encoding = qa_tokenizer(
+            label,
+            review_text,
+            return_tensors="pt",
+            truncation=True,
+            max_length=256,
+        )
+
+        # question / context 구분을 위한 sequence_ids
+        sequence_ids = encoding.sequence_ids(0)  # list 길이 = 토큰 수
+
+        # 일부 모델에서는 token_type_ids 미사용 → 제거
+        if "token_type_ids" in encoding:
+            del encoding["token_type_ids"]
+
+        with torch.no_grad():
+            outputs = qa_model(**encoding)
+
+        start_logits = outputs.start_logits[0]  # (seq_len,)
+        end_logits = outputs.end_logits[0]      # (seq_len,)
+
+        # context(token_type == 1)에 해당하는 토큰만 허용
+        # sequence_ids 내에서 1인 위치가 context
+        context_mask = torch.tensor(
+            [1 if s == 1 else 0 for s in sequence_ids],
+            dtype=torch.bool,
+        )
+
+        # question / special token 쪽은 매우 작은 값으로 마스킹
+        start_logits = start_logits.masked_fill(~context_mask, -1e9)
+        end_logits = end_logits.masked_fill(~context_mask, -1e9)
+
+        # argmax로 start/end 선택
+        start_idx = int(torch.argmax(start_logits))
+        end_idx = int(torch.argmax(end_logits))
+        if end_idx < start_idx:
+            end_idx = start_idx
+
+        # span score: start_logit + end_logit
+        score = start_logits[start_idx].item() + end_logits[end_idx].item()
+
+        span = qa_tokenizer.decode(
+            encoding["input_ids"][0][start_idx : end_idx + 1],
+            skip_special_tokens=True,
+        ).strip()
+
+        label2score_span[label] = (score, span)
+
+    # 가장 score가 큰 라벨 선택
+    best_label, (best_score, best_span) = max(
+        label2score_span.items(), key=lambda x: x[1][0]
     )
 
-    with torch.no_grad():
-        logits = cls_model(**inputs).logits  # (1, 3)
+    # label score 들을 softmax로 확률처럼 normalization
+    scores_tensor = torch.tensor([label2score_span[l][0] for l in CANDIDATE_LABELS])
+    probs_tensor = F.softmax(scores_tensor, dim=-1)
 
-    probs = F.softmax(logits, dim=-1)[0].tolist()
-    label_names = ["negative", "neutral", "positive"]
     prob_dict = {
-        "negative": probs[0],
-        "neutral": probs[1],
-        "positive": probs[2],
+        label: float(probs_tensor[i].item())
+        for i, label in enumerate(CANDIDATE_LABELS)
     }
 
-    pred_idx = int(torch.argmax(logits, dim=-1).item())
-    pred_label = label_names[pred_idx]
-
-    return pred_label, prob_dict
-
+    return best_label, best_span, prob_dict
 
 # =========================================
-# 4. 스팬 추출 함수 (QA DeBERTa)
+# 4. 생략
 # =========================================
-def extract_span_with_qa(sentiment_label: str, review_text: str):
-    """
-    Tweet Sentiment Extraction 포맷처럼,
-    question = sentiment_label, context = review_text 로 넣어서
-    해당 감정에 대한 근거 스팬을 추출
-    """
-    inputs = qa_tokenizer(
-        sentiment_label,
-        review_text,
-        return_tensors="pt",
-        truncation=True,
-        max_length=128,
-    )
-
-    if "token_type_ids" in inputs:
-        del inputs["token_type_ids"]
-
-    with torch.no_grad():
-        outputs = qa_model(**inputs)
-
-    start_probs = F.softmax(outputs.start_logits, dim=-1)
-    end_probs = F.softmax(outputs.end_logits, dim=-1)
-
-    start_idx = int(torch.argmax(start_probs))
-    end_idx = int(torch.argmax(end_probs))
-    if end_idx < start_idx:
-        end_idx = start_idx
-
-    span = qa_tokenizer.decode(
-        inputs["input_ids"][0][start_idx : end_idx + 1],
-        skip_special_tokens=True,
-    ).strip()
-
-    return span
-
 
 # =========================================
 # 5. 워드클라우드 생성 함수
@@ -220,13 +212,11 @@ with tab_single:
         if analyze_btn and review_text.strip():
             text_clean = review_text.strip()
 
-            # 1) 감정 분류
-            with st.spinner("감정을 분류하는 중입니다..."):
-                pred_sentiment, prob_dict = classify_sentiment(text_clean)
-
-            # 2) 스팬 추출
-            with st.spinner("해당 감정에 대한 스팬을 추출하는 중입니다..."):
-                predicted_span = extract_span_with_qa(pred_sentiment, text_clean)
+            # 1) QA 모델로 감정 + 스팬 동시 추론
+            with st.spinner("QA 모델로 감정과 스팬을 추론하는 중입니다..."):
+                pred_sentiment, predicted_span, prob_dict = qa_predict_label_and_span(
+                    text_clean
+                )
 
             # 결과 헤더
             st.subheader("📌 분석 결과")
@@ -361,9 +351,9 @@ with tab_csv:
                 total = len(df)
                 for i, (_, row) in enumerate(df.iterrows(), start=1):
                     text_val = str(row[text_col])
-                    pred_sent, _prob = classify_sentiment(text_val)
-                    span = extract_span_with_qa(pred_sent, text_val)
-                    sentiments.append(pred_sent)
+                    pred_label, span, _prob = qa_predict_label_and_span(text_val)
+
+                    sentiments.append(pred_label)
                     spans.append(span)
 
                     # 진행률 업데이트
@@ -386,9 +376,14 @@ with tab_csv:
 
             # 감정별 개수
             st.markdown("#### 감정별 리뷰 개수")
-            count_df = df["pred_sentiment"].value_counts().reindex(
-                ["positive", "neutral", "negative"]
-            ).fillna(0).astype(int).reset_index()
+            count_df = (
+                df["pred_sentiment"]
+                .value_counts()
+                .reindex(["positive", "neutral", "negative"])
+                .fillna(0)
+                .astype(int)
+                .reset_index()
+            )
             count_df.columns = ["sentiment", "count"]
             st.dataframe(count_df, use_container_width=True)
 
