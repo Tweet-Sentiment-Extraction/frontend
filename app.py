@@ -354,16 +354,30 @@ with tab_csv:
             sentiments = []
             spans = []
 
+            # 진행률 표시 바 생성
+            progress_bar = st.progress(0.0)
+
             with st.spinner("리뷰들을 분석하는 중입니다... (classifier + QA)"):
-                for _, row in df.iterrows():
+                total = len(df)
+                for i, (_, row) in enumerate(df.iterrows(), start=1):
                     text_val = str(row[text_col])
                     pred_sent, _prob = classify_sentiment(text_val)
                     span = extract_span_with_qa(pred_sent, text_val)
                     sentiments.append(pred_sent)
                     spans.append(span)
 
+                    # 진행률 업데이트
+                    progress_bar.progress(i / total)
+
+            # 진행률 바 제거
+            progress_bar.empty()
+
+            # 완료 알림
+            st.success("✅ CSV 리뷰 분석이 완료되었습니다!")
+
             df["pred_sentiment"] = sentiments
             df["span"] = spans
+
 
             st.markdown("#### 분석 결과 미리보기")
             st.dataframe(df[[text_col, "pred_sentiment", "span"]].head(20), use_container_width=True)
@@ -381,18 +395,23 @@ with tab_csv:
             # 워드클라우드: 감정별 span 기반
             st.markdown("#### 🎨 감정별 워드클라우드 (QA 스팬 기반)")
 
-            wc_col1, wc_col2, wc_col3 = st.columns(3)
-            with wc_col1:
-                st.markdown("**Positive**")
-                make_wordcloud(df[df["pred_sentiment"] == "positive"]["span"].tolist(), "Positive")
+            st.markdown("**Positive**")
+            make_wordcloud(
+                df[df["pred_sentiment"] == "positive"]["span"].tolist(),
+                "Positive"
+            )
 
-            with wc_col2:
-                st.markdown("**Neutral**")
-                make_wordcloud(df[df["pred_sentiment"] == "neutral"]["span"].tolist(), "Neutral")
+            st.markdown("**Neutral**")
+            make_wordcloud(
+                df[df["pred_sentiment"] == "neutral"]["span"].tolist(),
+                "Neutral"
+            )
 
-            with wc_col3:
-                st.markdown("**Negative**")
-                make_wordcloud(df[df["pred_sentiment"] == "negative"]["span"].tolist(), "Negative")
+            st.markdown("**Negative**")
+            make_wordcloud(
+                df[df["pred_sentiment"] == "negative"]["span"].tolist(),
+                "Negative"
+            )
 
             st.markdown("#### ⬇️ 전체 결과 다운로드용 CSV")
             st.download_button(
@@ -401,5 +420,6 @@ with tab_csv:
                 file_name="zara_reviews_with_sentiment_and_span.csv",
                 mime="text/csv",
             )
+
     else:
         st.info("CSV 파일을 업로드하면, 감정별 워드클라우드를 생성할 수 있습니다.")
