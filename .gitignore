@@ -1,0 +1,4 @@
+model/
+
+# Python cache
+utils/__pycache__/*.pyc
