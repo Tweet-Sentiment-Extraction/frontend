@@ -54,14 +54,15 @@ https://www.kaggle.com/c/tweet-sentiment-extraction
  
 <br>
 
-## 프로토타입 시연 화면
+## Prototype Demo Screen
 
 | 기능 | 시연 화면 |
 | :--- | :---: |
-| **메인 화면 - 실시간 트윗 분석** | 
-<img width="1355" height="897" alt="스크린샷_2025-12-05_170944" src="https://github.com/user-attachments/assets/29fefc83-1006-4b5e-b6ff-82237f9a4ec8" /> |
+| **메인 화면 - 실시간 트윗 분석** | <img width="1355" height="897" alt="스크린샷_2025-12-05_170944" src="https://github.com/user-attachments/assets/29fefc83-1006-4b5e-b6ff-82237f9a4ec8" /> |
 | **데이터 분석 페이지 (CSV 업로드 분석)** | <img width="1353" height="898" alt="스크린샷_2025-12-05_172638" src="https://github.com/user-attachments/assets/ea123ba9-e295-4d62-b198-f5ec576dfa39" /><img width="1336" height="893" alt="스크린샷_2025-12-05_172717" src="https://github.com/user-attachments/assets/ca0e2308-a484-4d5f-a8a4-71e9900fd65c" /><img width="1354" height="902" alt="스크린샷_2025-12-05_171604" src="https://github.com/user-attachments/assets/204f14a1-871f-49b4-becc-a4ac44fa546c" /> |
 | **트렌드 페이지 (모의 데이터 기반 시연)** | <img width="1343" height="899" alt="스크린샷_2025-12-05_171625" src="https://github.com/user-attachments/assets/af336ba0-a226-4fe3-a55e-4db8204a2c8a" /><img width="1352" height="857" alt="스크린샷_2025-12-05_171932" src="https://github.com/user-attachments/assets/c84be08f-6ede-4bb4-8648-a6ba86d6b739" /> |
+
+<br>
   
 ## Key Points
 
